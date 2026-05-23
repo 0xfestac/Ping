@@ -8,6 +8,8 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, UTC
 
+MAX_LOG_SIZE = 5 * 1024 * 1024  # 5MB
+
 # =========================================================
 # RENDER WEB SERVER
 # =========================================================
@@ -166,6 +168,22 @@ async def check_site(session, url):
 async def save_logs(results):
 
     try:
+
+        # Rotate if file too large
+        if os.path.exists(LOG_FILE):
+
+            size = os.path.getsize(LOG_FILE)
+
+            if size >= MAX_LOG_SIZE:
+
+                backup = f"{LOG_FILE}.old"
+
+                if os.path.exists(backup):
+                    os.remove(backup)
+
+                os.rename(LOG_FILE, backup)
+
+                print("[LOG] Rotated log file")
 
         async with aiofiles.open(
             LOG_FILE,
