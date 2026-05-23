@@ -65,7 +65,7 @@ SITES = [
     "https://eye-21.onrender.com",
     "https://eye-22.onrender.com",
     "https://eye-23.onrender.com",
-
+    "https://ping-4wzk.onrender.com",
     "https://eye-o8vu.onrender.com",
     "https://eye-1-lgnc.onrender.com",
     "https://eye-2-aky4.onrender.com",
