@@ -7,7 +7,10 @@ import threading
 import json
 
 from collections import deque
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from http.server import (
+    ThreadingHTTPServer,
+    BaseHTTPRequestHandler
+)
 from datetime import datetime, UTC
 
 # =========================================================
@@ -19,7 +22,7 @@ INTERVAL = 300
 LOG_FILE = "uptime_logs.txt"
 
 HEADERS = {
-    "User-Agent": "Eye-Uptime-Bot/7.0"
+    "User-Agent": "Eye-Uptime-Bot/8.0"
 }
 
 TIMEOUT = aiohttp.ClientTimeout(
@@ -104,13 +107,15 @@ class HealthHandler(BaseHTTPRequestHandler):
         global TOTAL_CHECKS
         global TOTAL_FAILURES
 
-        # =============================================
+        # =================================================
         # JSON API
-        # =============================================
+        # =================================================
 
         if self.path == "/api/results":
 
-            results = list(LATEST_RESULTS)
+            results = list(
+                LATEST_RESULTS
+            )[-len(SITES):]
 
             payload = {
                 "results": results,
@@ -134,18 +139,22 @@ class HealthHandler(BaseHTTPRequestHandler):
 
             return
 
-        # =============================================
-        # HTML DASHBOARD
-        # =============================================
+        # =================================================
+        # CURRENT STATUS
+        # =================================================
 
-        results = list(LATEST_RESULTS)
+        results = list(
+            LATEST_RESULTS
+        )[-len(SITES):]
 
         success_count = len([
             r for r in results
             if "| 200 |" in r
         ])
 
-        fail_count = len(results) - success_count
+        fail_count = (
+            len(results) - success_count
+        )
 
         uptime = 100.0
 
@@ -153,24 +162,42 @@ class HealthHandler(BaseHTTPRequestHandler):
 
             uptime = round(
                 (
-                    (TOTAL_CHECKS - TOTAL_FAILURES)
+                    (
+                        TOTAL_CHECKS
+                        - TOTAL_FAILURES
+                    )
                     / TOTAL_CHECKS
                 ) * 100,
                 2
             )
 
+        # =================================================
+        # BUILD LOG ROWS
+        # =================================================
+
         rows = ""
 
-        for line in reversed(results[-100:]):
+        for line in reversed(
+            list(LATEST_RESULTS)[-100:]
+        ):
 
             css = "ok"
 
             if "ERROR" in line:
                 css = "bad"
 
+            elif "RECOVERED" in line:
+                css = "recovered"
+
             rows += (
-                f"<div class='{css}'>{line}</div>"
+                f"<div class='{css}'>"
+                f"{line}"
+                f"</div>"
             )
+
+        # =================================================
+        # HTML
+        # =================================================
 
         html = f"""
         <html>
@@ -195,7 +222,8 @@ class HealthHandler(BaseHTTPRequestHandler):
                     padding: 20px;
                     border-radius: 12px;
                     margin-bottom: 20px;
-                    box-shadow: 0 0 10px rgba(0,0,0,0.3);
+                    box-shadow:
+                        0 0 10px rgba(0,0,0,0.3);
                 }}
 
                 .ok {{
@@ -281,22 +309,38 @@ class HealthHandler(BaseHTTPRequestHandler):
 
             async function retryFailedSites() {{
 
-                const failed = document.querySelectorAll(".bad");
+                const failed =
+                    document.querySelectorAll(
+                        ".bad"
+                    );
 
                 for (const item of failed) {{
 
-                    const text = item.innerText;
+                    // Prevent duplicates
+                    if (
+                        item.dataset.recovered
+                    )
+                        continue;
 
-                    const match = text.match(/https:\\/\\/[^\\s|]+/);
+                    const text =
+                        item.innerText;
 
-                    if (!match) continue;
+                    const match =
+                        text.match(
+                            /https:\\/\\/[^\\s|]+/
+                        );
+
+                    if (!match)
+                        continue;
 
                     const url = match[0];
 
                     try {{
 
-                        const start = performance.now();
+                        const start =
+                            performance.now();
 
+                        // Wake sleeping service
                         await fetch(url, {{
                             method: "GET",
                             mode: "no-cors",
@@ -304,13 +348,20 @@ class HealthHandler(BaseHTTPRequestHandler):
                         }});
 
                         const latency = (
-                            performance.now() - start
+                            performance.now()
+                            - start
                         ).toFixed(2);
 
-                        item.className = "recovered";
+                        item.dataset.recovered =
+                            "true";
+
+                        item.className =
+                            "recovered";
 
                         item.innerHTML +=
-    ` <b>FRONTEND RECOVERED (${{latency}} ms)</b>`;
+                        ` <b>FRONTEND RECOVERED (${{
+                            latency
+                        }} ms)</b>`;
 
                     }}
 
@@ -348,14 +399,21 @@ class HealthHandler(BaseHTTPRequestHandler):
 
         self.wfile.write(html.encode())
 
-    def log_message(self, format, *args):
+    def log_message(
+        self,
+        format,
+        *args
+    ):
         return
 
 
 def run_web_server():
 
     port = int(
-        os.environ.get("PORT", 10000)
+        os.environ.get(
+            "PORT",
+            10000
+        )
     )
 
     server = ThreadingHTTPServer(
@@ -410,7 +468,8 @@ async def check_site(session, url):
                     if response.status != 200:
 
                         raise Exception(
-                            f"HTTP {response.status}"
+                            f"HTTP "
+                            f"{response.status}"
                         )
 
                     FAILED_COUNTS[url] = 0
@@ -436,10 +495,14 @@ async def check_site(session, url):
 
                 error = str(e)
 
+            # Final retry failed
             if attempt == 2:
 
                 FAILED_COUNTS[url] = (
-                    FAILED_COUNTS.get(url, 0) + 1
+                    FAILED_COUNTS.get(
+                        url,
+                        0
+                    ) + 1
                 )
 
                 TOTAL_CHECKS += 1
@@ -471,11 +534,13 @@ async def check_site(session, url):
                     print(
                         f"[ALERT] "
                         f"{url} failed "
-                        f"{FAILED_COUNTS[url]} times"
+                        f"{FAILED_COUNTS[url]} "
+                        f"times"
                     )
 
                 return result
 
+            # Exponential backoff
             backoff = 2 ** attempt
 
             await asyncio.sleep(backoff)
@@ -492,7 +557,10 @@ async def staggered_check(
 
     await asyncio.sleep(index * 0.15)
 
-    return await check_site(session, url)
+    return await check_site(
+        session,
+        url
+    )
 
 # =========================================================
 # LOGGING
@@ -504,16 +572,23 @@ async def save_logs(results):
 
         if os.path.exists(LOG_FILE):
 
-            size = os.path.getsize(LOG_FILE)
+            size = os.path.getsize(
+                LOG_FILE
+            )
 
             if size >= MAX_LOG_SIZE:
 
-                backup = f"{LOG_FILE}.old"
+                backup = (
+                    f"{LOG_FILE}.old"
+                )
 
                 if os.path.exists(backup):
                     os.remove(backup)
 
-                os.rename(LOG_FILE, backup)
+                os.rename(
+                    LOG_FILE,
+                    backup
+                )
 
                 print(
                     "[LOG] Rotated log file"
@@ -530,7 +605,9 @@ async def save_logs(results):
 
     except Exception as e:
 
-        print(f"[LOG ERROR] {e}")
+        print(
+            f"[LOG ERROR] {e}"
+        )
 
 # =========================================================
 # MAIN LOOP
@@ -565,7 +642,8 @@ async def run_monitor():
 
                 print(
                     f"\n===== STARTING CHECK "
-                    f"{LAST_CHECK_TIME} =====\n"
+                    f"{LAST_CHECK_TIME} "
+                    f"=====\n"
                 )
 
                 cycle_start = (
@@ -589,7 +667,9 @@ async def run_monitor():
                     return_exceptions=False
                 )
 
-                LATEST_RESULTS.extend(results)
+                LATEST_RESULTS.extend(
+                    results
+                )
 
                 await save_logs(results)
 
@@ -603,21 +683,25 @@ async def run_monitor():
 
                 print(
                     f"\nFinished checking "
-                    f"{len(SITES)} sites in "
-                    f"{elapsed} seconds"
+                    f"{len(SITES)} sites "
+                    f"in {elapsed} seconds"
                 )
 
                 print(
                     f"\n===== SLEEPING "
-                    f"{INTERVAL} SECONDS =====\n"
+                    f"{INTERVAL} SECONDS "
+                    f"=====\n"
                 )
 
-                await asyncio.sleep(INTERVAL)
+                await asyncio.sleep(
+                    INTERVAL
+                )
 
             except Exception as e:
 
                 print(
-                    f"[MAIN LOOP ERROR] {e}"
+                    f"[MAIN LOOP ERROR] "
+                    f"{e}"
                 )
 
                 await asyncio.sleep(5)
