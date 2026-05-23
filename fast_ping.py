@@ -2,7 +2,50 @@ import asyncio
 import aiohttp
 import aiofiles
 import time
+import os
+import threading
+
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, UTC
+
+# =========================================================
+# RENDER WEB SERVER
+# =========================================================
+
+class HealthHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"EYE MONITOR ACTIVE")
+
+    def log_message(self, format, *args):
+        return
+
+
+def run_web_server():
+
+    port = int(os.environ.get("PORT", 10000))
+
+    server = HTTPServer(
+        ("0.0.0.0", port),
+        HealthHandler
+    )
+
+    print(f"[WEB] Running on port {port}")
+
+    server.serve_forever()
+
+
+threading.Thread(
+    target=run_web_server,
+    daemon=True
+).start()
+
+# =========================================================
+# CONFIG
+# =========================================================
 
 SITES = [
 
@@ -30,7 +73,6 @@ SITES = [
     "https://eye-21.onrender.com",
     "https://eye-22.onrender.com",
     "https://eye-23.onrender.com",
-
     "https://eye-o8vu.onrender.com",
     "https://eye-1-lgnc.onrender.com",
     "https://eye-2-aky4.onrender.com",
@@ -43,17 +85,20 @@ SITES = [
 ]
 
 INTERVAL = 300
+LOG_FILE = "uptime_logs.txt"
 
 HEADERS = {
-    "User-Agent": "Eye-Uptime-Bot/3.0"
+    "User-Agent": "Eye-Uptime-Bot/4.0"
 }
 
 TIMEOUT = aiohttp.ClientTimeout(
-    total=8
+    total=10,
+    connect=5
 )
 
-LOG_FILE = "uptime_logs.txt"
-
+# =========================================================
+# CHECK SITE
+# =========================================================
 
 async def check_site(session, url):
 
@@ -85,46 +130,64 @@ async def check_site(session, url):
 
                 return result
 
+        except asyncio.TimeoutError:
+
+            error = "TIMEOUT"
+
         except Exception as e:
 
-            if attempt == 1:
+            error = str(e)
 
-                latency = round(
-                    (time.perf_counter() - start) * 1000,
-                    2
-                )
+        if attempt == 1:
 
-                result = (
-                    f"[{datetime.now(UTC)}] | "
-                    f"{url} | "
-                    f"ERROR | "
-                    f"{latency} ms | "
-                    f"{str(e)}"
-                )
+            latency = round(
+                (time.perf_counter() - start) * 1000,
+                2
+            )
 
-                print(result)
+            result = (
+                f"[{datetime.now(UTC)}] | "
+                f"{url} | "
+                f"ERROR | "
+                f"{latency} ms | "
+                f"{error}"
+            )
 
-                return result
+            print(result)
 
-            await asyncio.sleep(1)
+            return result
 
+        await asyncio.sleep(1)
+
+# =========================================================
+# SAVE LOGS
+# =========================================================
 
 async def save_logs(results):
 
-    async with aiofiles.open(
-        LOG_FILE,
-        "a"
-    ) as f:
+    try:
 
-        await f.write(
-            "\n".join(results) + "\n"
-        )
+        async with aiofiles.open(
+            LOG_FILE,
+            "a"
+        ) as f:
 
+            await f.write(
+                "\n".join(results) + "\n"
+            )
+
+    except Exception as e:
+
+        print(f"[LOG ERROR] {e}")
+
+# =========================================================
+# MAIN LOOP
+# =========================================================
 
 async def run_monitor():
 
     connector = aiohttp.TCPConnector(
-        limit=0,
+        limit=100,
         ttl_dns_cache=300,
         ssl=False
     )
@@ -137,46 +200,57 @@ async def run_monitor():
 
         while True:
 
-            print(
-                f"\n===== STARTING CHECK "
-                f"{datetime.now(UTC)} =====\n"
-            )
+            try:
 
-            cycle_start = time.perf_counter()
-
-            tasks = [
-                asyncio.create_task(
-                    check_site(session, site)
+                print(
+                    f"\n===== STARTING CHECK "
+                    f"{datetime.now(UTC)} =====\n"
                 )
-                for site in SITES
-            ]
 
-            results = await asyncio.gather(
-                *tasks,
-                return_exceptions=False
-            )
+                cycle_start = time.perf_counter()
 
-            await save_logs(results)
+                tasks = [
+                    check_site(session, site)
+                    for site in SITES
+                ]
 
-            elapsed = round(
-                time.perf_counter() - cycle_start,
-                2
-            )
+                results = await asyncio.gather(
+                    *tasks,
+                    return_exceptions=False
+                )
 
-            print(
-                f"\nFinished checking "
-                f"{len(SITES)} sites in "
-                f"{elapsed} seconds"
-            )
+                await save_logs(results)
 
-            print(
-                f"\n===== SLEEPING "
-                f"{INTERVAL} SECONDS =====\n"
-            )
+                elapsed = round(
+                    time.perf_counter() - cycle_start,
+                    2
+                )
 
-            await asyncio.sleep(INTERVAL)
+                print(
+                    f"\nFinished checking "
+                    f"{len(SITES)} sites in "
+                    f"{elapsed} seconds"
+                )
 
+                print(
+                    f"\n===== SLEEPING "
+                    f"{INTERVAL} SECONDS =====\n"
+                )
+
+                await asyncio.sleep(INTERVAL)
+
+            except Exception as e:
+
+                print(f"[MAIN LOOP ERROR] {e}")
+
+                await asyncio.sleep(5)
+
+# =========================================================
+# START
+# =========================================================
 
 if __name__ == "__main__":
+
+    print("[SYSTEM] EYE MONITOR STARTED")
 
     asyncio.run(run_monitor())
