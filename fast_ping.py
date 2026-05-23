@@ -310,7 +310,7 @@ class HealthHandler(BaseHTTPRequestHandler):
                         item.className = "recovered";
 
                         item.innerHTML +=
-                            ` <b>FRONTEND RECOVERED (${latency} ms)</b>`;
+    ` <b>FRONTEND RECOVERED (${{latency}} ms)</b>`;
 
                     }}
 
