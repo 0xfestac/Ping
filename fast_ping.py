@@ -4,8 +4,10 @@ import aiofiles
 import time
 import os
 import threading
+import json
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from collections import deque
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, UTC
 
 # =========================================================
@@ -17,23 +19,36 @@ INTERVAL = 300
 LOG_FILE = "uptime_logs.txt"
 
 HEADERS = {
-    "User-Agent": "Eye-Uptime-Bot/5.0"
+    "User-Agent": "Eye-Uptime-Bot/7.0"
 }
 
 TIMEOUT = aiohttp.ClientTimeout(
-    total=10,
-    connect=5
+    total=20,
+    connect=5,
+    sock_connect=5,
+    sock_read=10
 )
 
 FAIL_THRESHOLD = 3
+MAX_RESULTS_MEMORY = 500
+
+# Max concurrent requests
+SEMAPHORE = asyncio.Semaphore(10)
 
 # =========================================================
 # GLOBAL STATE
 # =========================================================
 
 FAILED_COUNTS = {}
-LATEST_RESULTS = []
+
+LATEST_RESULTS = deque(
+    maxlen=MAX_RESULTS_MEMORY
+)
+
 LAST_CHECK_TIME = "Never"
+
+TOTAL_CHECKS = 0
+TOTAL_FAILURES = 0
 
 # =========================================================
 # SITES
@@ -85,31 +100,86 @@ class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
 
-        global LATEST_RESULTS
         global LAST_CHECK_TIME
+        global TOTAL_CHECKS
+        global TOTAL_FAILURES
+
+        # =============================================
+        # JSON API
+        # =============================================
+
+        if self.path == "/api/results":
+
+            results = list(LATEST_RESULTS)
+
+            payload = {
+                "results": results,
+                "last_check": LAST_CHECK_TIME,
+                "checks": TOTAL_CHECKS,
+                "failures": TOTAL_FAILURES
+            }
+
+            self.send_response(200)
+
+            self.send_header(
+                "Content-type",
+                "application/json"
+            )
+
+            self.end_headers()
+
+            self.wfile.write(
+                json.dumps(payload).encode()
+            )
+
+            return
+
+        # =============================================
+        # HTML DASHBOARD
+        # =============================================
+
+        results = list(LATEST_RESULTS)
 
         success_count = len([
-            r for r in LATEST_RESULTS
+            r for r in results
             if "| 200 |" in r
         ])
 
-        fail_count = len(LATEST_RESULTS) - success_count
+        fail_count = len(results) - success_count
+
+        uptime = 100.0
+
+        if TOTAL_CHECKS > 0:
+
+            uptime = round(
+                (
+                    (TOTAL_CHECKS - TOTAL_FAILURES)
+                    / TOTAL_CHECKS
+                ) * 100,
+                2
+            )
 
         rows = ""
 
-        for line in LATEST_RESULTS[-100:]:
+        for line in reversed(results[-100:]):
 
             css = "ok"
 
             if "ERROR" in line:
                 css = "bad"
 
-            rows += f"<div class='{css}'>{line}</div>"
+            rows += (
+                f"<div class='{css}'>{line}</div>"
+            )
 
         html = f"""
         <html>
+
         <head>
+
             <title>EYE Monitor</title>
+
+            <meta http-equiv="refresh" content="15">
 
             <style>
 
@@ -125,16 +195,25 @@ class HealthHandler(BaseHTTPRequestHandler):
                     padding: 20px;
                     border-radius: 12px;
                     margin-bottom: 20px;
+                    box-shadow: 0 0 10px rgba(0,0,0,0.3);
                 }}
 
                 .ok {{
                     color: #22c55e;
-                    margin-bottom: 4px;
+                    margin-bottom: 5px;
+                    word-wrap: break-word;
                 }}
 
                 .bad {{
                     color: #ef4444;
-                    margin-bottom: 4px;
+                    margin-bottom: 5px;
+                    word-wrap: break-word;
+                }}
+
+                .recovered {{
+                    color: #facc15;
+                    margin-bottom: 5px;
+                    word-wrap: break-word;
                 }}
 
                 h1 {{
@@ -143,11 +222,12 @@ class HealthHandler(BaseHTTPRequestHandler):
 
                 .stats {{
                     display: flex;
-                    gap: 20px;
                     flex-wrap: wrap;
+                    gap: 20px;
                 }}
 
             </style>
+
         </head>
 
         <body>
@@ -172,6 +252,11 @@ class HealthHandler(BaseHTTPRequestHandler):
                 </div>
 
                 <div class="card">
+                    <h2>Uptime</h2>
+                    <p>{uptime}%</p>
+                </div>
+
+                <div class="card">
                     <h2>Last Check</h2>
                     <p>{LAST_CHECK_TIME}</p>
                 </div>
@@ -179,19 +264,86 @@ class HealthHandler(BaseHTTPRequestHandler):
             </div>
 
             <div class="card">
+
                 <h2>Latest Results</h2>
-                {rows}
+
+                <div id="results">
+                    {rows}
+                </div>
+
             </div>
 
+            <!-- ===================================== -->
+            <!-- FRONTEND RETRY SYSTEM -->
+            <!-- ===================================== -->
+
+            <script>
+
+            async function retryFailedSites() {{
+
+                const failed = document.querySelectorAll(".bad");
+
+                for (const item of failed) {{
+
+                    const text = item.innerText;
+
+                    const match = text.match(/https:\\/\\/[^\\s|]+/);
+
+                    if (!match) continue;
+
+                    const url = match[0];
+
+                    try {{
+
+                        const start = performance.now();
+
+                        await fetch(url, {{
+                            method: "GET",
+                            mode: "no-cors",
+                            cache: "no-store"
+                        }});
+
+                        const latency = (
+                            performance.now() - start
+                        ).toFixed(2);
+
+                        item.className = "recovered";
+
+                        item.innerHTML +=
+                            ` <b>FRONTEND RECOVERED (${latency} ms)</b>`;
+
+                    }}
+
+                    catch (e) {{
+
+                        console.log(
+                            "Frontend retry failed:",
+                            url
+                        );
+
+                    }}
+                }}
+            }}
+
+            setInterval(
+                retryFailedSites,
+                30000
+            );
+
+            </script>
+
         </body>
+
         </html>
         """
 
         self.send_response(200)
+
         self.send_header(
             "Content-type",
             "text/html"
         )
+
         self.end_headers()
 
         self.wfile.write(html.encode())
@@ -202,14 +354,19 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def run_web_server():
 
-    port = int(os.environ.get("PORT", 10000))
+    port = int(
+        os.environ.get("PORT", 10000)
+    )
 
-    server = HTTPServer(
+    server = ThreadingHTTPServer(
         ("0.0.0.0", port),
         HealthHandler
     )
 
-    print(f"[WEB] Dashboard running on port {port}")
+    print(
+        f"[WEB] Dashboard running "
+        f"on port {port}"
+    )
 
     server.serve_forever()
 
@@ -225,78 +382,117 @@ threading.Thread(
 
 async def check_site(session, url):
 
-    for attempt in range(3):
+    global TOTAL_CHECKS
+    global TOTAL_FAILURES
 
-        start = time.perf_counter()
+    async with SEMAPHORE:
 
-        try:
+        for attempt in range(3):
 
-            async with session.get(
-                url,
-                ssl=False,
-                allow_redirects=True
-            ) as response:
+            start = time.perf_counter()
+
+            try:
+
+                async with session.get(
+                    url,
+                    ssl=False,
+                    allow_redirects=True
+                ) as response:
+
+                    latency = round(
+                        (
+                            time.perf_counter()
+                            - start
+                        ) * 1000,
+                        2
+                    )
+
+                    if response.status != 200:
+
+                        raise Exception(
+                            f"HTTP {response.status}"
+                        )
+
+                    FAILED_COUNTS[url] = 0
+
+                    TOTAL_CHECKS += 1
+
+                    result = (
+                        f"[{datetime.now(UTC)}] | "
+                        f"{url} | "
+                        f"{response.status} | "
+                        f"{latency} ms"
+                    )
+
+                    print(result)
+
+                    return result
+
+            except asyncio.TimeoutError:
+
+                error = "TIMEOUT"
+
+            except Exception as e:
+
+                error = str(e)
+
+            if attempt == 2:
+
+                FAILED_COUNTS[url] = (
+                    FAILED_COUNTS.get(url, 0) + 1
+                )
+
+                TOTAL_CHECKS += 1
+                TOTAL_FAILURES += 1
 
                 latency = round(
-                    (time.perf_counter() - start) * 1000,
+                    (
+                        time.perf_counter()
+                        - start
+                    ) * 1000,
                     2
                 )
 
                 result = (
                     f"[{datetime.now(UTC)}] | "
                     f"{url} | "
-                    f"{response.status} | "
-                    f"{latency} ms"
+                    f"ERROR | "
+                    f"{latency} ms | "
+                    f"{error}"
                 )
-
-                FAILED_COUNTS[url] = 0
 
                 print(result)
 
+                if (
+                    FAILED_COUNTS[url]
+                    >= FAIL_THRESHOLD
+                ):
+
+                    print(
+                        f"[ALERT] "
+                        f"{url} failed "
+                        f"{FAILED_COUNTS[url]} times"
+                    )
+
                 return result
 
-        except asyncio.TimeoutError:
+            backoff = 2 ** attempt
 
-            error = "TIMEOUT"
+            await asyncio.sleep(backoff)
 
-        except Exception as e:
+# =========================================================
+# STAGGER REQUESTS
+# =========================================================
 
-            error = str(e)
+async def staggered_check(
+    session,
+    url,
+    index
+):
 
-        if attempt == 2:
+    await asyncio.sleep(index * 0.15)
 
-            FAILED_COUNTS[url] = (
-                FAILED_COUNTS.get(url, 0) + 1
-            )
-
-            latency = round(
-                (time.perf_counter() - start) * 1000,
-                2
-            )
-
-            result = (
-                f"[{datetime.now(UTC)}] | "
-                f"{url} | "
-                f"ERROR | "
-                f"{latency} ms | "
-                f"{error}"
-            )
-
-            print(result)
-
-            if FAILED_COUNTS[url] >= FAIL_THRESHOLD:
-
-                print(
-                    f"[ALERT] "
-                    f"{url} failed "
-                    f"{FAILED_COUNTS[url]} times"
-                )
-
-            return result
-
-        backoff = 2 ** attempt
-
-        await asyncio.sleep(backoff)
+    return await check_site(session, url)
 
 # =========================================================
 # LOGGING
@@ -319,7 +515,9 @@ async def save_logs(results):
 
                 os.rename(LOG_FILE, backup)
 
-                print("[LOG] Rotated log file")
+                print(
+                    "[LOG] Rotated log file"
+                )
 
         async with aiofiles.open(
             LOG_FILE,
@@ -340,12 +538,14 @@ async def save_logs(results):
 
 async def run_monitor():
 
-    global LATEST_RESULTS
     global LAST_CHECK_TIME
 
     connector = aiohttp.TCPConnector(
-        limit=100,
-        ttl_dns_cache=300,
+        limit=50,
+        limit_per_host=5,
+        ttl_dns_cache=600,
+        enable_cleanup_closed=True,
+        force_close=False,
         ssl=False
     )
 
@@ -368,11 +568,20 @@ async def run_monitor():
                     f"{LAST_CHECK_TIME} =====\n"
                 )
 
-                cycle_start = time.perf_counter()
+                cycle_start = (
+                    time.perf_counter()
+                )
 
                 tasks = [
-                    check_site(session, site)
-                    for site in SITES
+
+                    staggered_check(
+                        session,
+                        site,
+                        i
+                    )
+
+                    for i, site
+                    in enumerate(SITES)
                 ]
 
                 results = await asyncio.gather(
@@ -380,12 +589,15 @@ async def run_monitor():
                     return_exceptions=False
                 )
 
-                LATEST_RESULTS = results
+                LATEST_RESULTS.extend(results)
 
                 await save_logs(results)
 
                 elapsed = round(
-                    time.perf_counter() - cycle_start,
+                    (
+                        time.perf_counter()
+                        - cycle_start
+                    ),
                     2
                 )
 
@@ -404,7 +616,9 @@ async def run_monitor():
 
             except Exception as e:
 
-                print(f"[MAIN LOOP ERROR] {e}")
+                print(
+                    f"[MAIN LOOP ERROR] {e}"
+                )
 
                 await asyncio.sleep(5)
 
@@ -414,6 +628,8 @@ async def run_monitor():
 
 if __name__ == "__main__":
 
-    print("[SYSTEM] EYE MONITOR STARTED")
+    print(
+        "[SYSTEM] EYE MONITOR STARTED"
+    )
 
     asyncio.run(run_monitor())
