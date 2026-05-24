@@ -121,7 +121,12 @@ SITES = [
     "https://eye-11-vbj4.onrender.com",
     "https://eye-12-1p4i.onrender.com",
     "https://eye-13-6b0x.onrender.com",
-    "https://eye-14-mcxt.onrender.com"
+    "https://eye-14-mcxt.onrender.com",
+    "https://eye-15-o938.onrender.com",
+    "https://eye-16-2dr0.onrender.com",
+    "https://eye-17-6mqd.onrender.com",
+    "https://eye-18-femu.onrender.com",
+    "https://eye-19-1nyg.onrender.com"
 ]
 
 # =========================================================
