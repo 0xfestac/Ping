@@ -126,7 +126,18 @@ SITES = [
     "https://eye-16-2dr0.onrender.com",
     "https://eye-17-6mqd.onrender.com",
     "https://eye-18-femu.onrender.com",
-    "https://eye-19-1nyg.onrender.com"
+    "https://eye-19-1nyg.onrender.com",
+    "https://eye-4v90.onrender.com",
+    "https://eye-1-pzzt.onrender.com",
+    "https://eye-2-m25e.onrender.com",
+    "https://eye-3-3ng8.onrender.com",
+    "https://eye-4-i20o.onrender.com",
+    "https://eye-5-qi32.onrender.com",
+    "https://eye-6-y4oe.onrender.com",
+    "https://eye-7-68g3.onrender.com",
+    "https://eye-8-bglq.onrender.com",
+    "https://eye-9-556d.onrender.com",
+    "https://eye-10-ttiw.onrender.com"
 ]
 
 # =========================================================
